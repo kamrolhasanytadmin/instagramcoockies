@@ -38,9 +38,14 @@ def handle_document(message):
         with open(input_filename, 'wb') as new_file:
             new_file.write(downloaded_file)
         
-        # ফাইল রিড করা
-        with open(input_filename, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        # ফাইল রিড করা (Encoding Error ফিক্স করা হয়েছে)
+        try:
+            with open(input_filename, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except UnicodeDecodeError:
+            # যদি utf-8 সাপোর্ট না করে, তাহলে latin-1 বা Windows encoding দিয়ে রিড করবে
+            with open(input_filename, 'r', encoding='latin-1') as f:
+                lines = f.readlines()
         
         os.remove(input_filename) # কাজ শেষে ডিলিট করে দেওয়া
         
