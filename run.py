@@ -8,57 +8,50 @@ import time
 TOKEN = '8930208020:AAEeXaX_ETPruf_EcTAqSKimFZJxkxhYSfw'
 bot = telebot.TeleBot(TOKEN)
 
-# ইউজারদের ডেটা সাময়িকভাবে সেভ রাখার জন্য একটি ডিকশনারি
-user_data = {}
-
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     chat_id = message.chat.id
     welcome_text = (
-        "🔥 *Welcome to IG Cookie Extractor Bot* 🔥\n"
+        "🔥 *Welcome to MASS IG Cookie Extractor* 🔥\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "দয়া করে আপনার ইনস্টাগ্রাম Username দিন:"
+        "দয়া করে আপনার অ্যাকাউন্টগুলো নিচের নিয়মে দিন:\n\n"
+        "`username|password|2fa_secret`\n"
+        "`username2|password|2fa_secret`\n\n"
+        "আপনি একসাথে অনেকগুলো অ্যাকাউন্ট কপি-পেস্ট করে দিতে পারবেন!"
     )
     bot.send_message(chat_id, welcome_text, parse_mode='Markdown')
-    # পরবর্তী মেসেজটি process_username ফাংশনে পাঠাবে
-    bot.register_next_step_handler(message, process_username)
+    # পরবর্তী মেসেজটি process_accounts ফাংশনে পাঠাবে
+    bot.register_next_step_handler(message, process_accounts)
 
-def process_username(message):
+def process_accounts(message):
     chat_id = message.chat.id
-    user_data[chat_id] = {'username': message.text}
-    bot.send_message(chat_id, "✅ Username সেভ হয়েছে!\n\nএবার আপনার Password দিন:")
-    bot.register_next_step_handler(message, process_password)
-
-def process_password(message):
-    chat_id = message.chat.id
-    user_data[chat_id]['password'] = message.text
-    bot.send_message(chat_id, "✅ Password সেভ হয়েছে!\n\nসবশেষে, আপনার 2FA Secret Key দিন:")
-    bot.register_next_step_handler(message, process_2fa)
-
-def process_2fa(message):
-    chat_id = message.chat.id
-    user_data[chat_id]['2fa_key'] = message.text
+    # ইউজারের মেসেজটি লাইন অনুযায়ী ভাগ করে নেওয়া হচ্ছে
+    lines = message.text.strip().split('\n')
     
-    bot.send_message(chat_id, "⏳ *Processing...* রিকোয়েস্ট পাঠানো হচ্ছে। দয়া করে ১৫-২০ সেকেন্ড অপেক্ষা করুন...", parse_mode='Markdown')
+    bot.send_message(chat_id, f"⏳ *Processing {len(lines)} accounts...* মাল্টি-থ্রেডিং চালু করা হয়েছে। দয়া করে অপেক্ষা করুন...", parse_mode='Markdown')
     
-    # মাল্টি-থ্রেডিং চালু করা হলো, যাতে বট ফ্রিজ না হয় এবং অন্য ইউজাররাও কাজ করতে পারে
-    threading.Thread(target=extract_cookies, args=(chat_id,)).start()
+    # প্রতিটি লাইনের জন্য লুপ চালানো
+    for line in lines:
+        parts = line.split('|')
+        # চেক করা হচ্ছে ফরম্যাট ঠিক আছে কি না (৩টি অংশ থাকতে হবে)
+        if len(parts) == 3:
+            username = parts[0].strip()
+            password = parts[1].strip()
+            two_fa_key = parts[2].strip()
+            
+            # প্রতিটি অ্যাকাউন্টের জন্য একটি করে আলাদা 'Thread' (ওয়ার্কার) চালু করা হচ্ছে
+            # ফলে ১০০টি আইডি দিলেও সবগুলোর কাজ একই সেকেন্ডে শুরু হবে!
+            threading.Thread(target=extract_cookies, args=(chat_id, username, password, two_fa_key)).start()
+        else:
+            bot.send_message(chat_id, f"❌ ভুল ফরম্যাট: `{line}`\nসঠিক নিয়ম: `user|pass|2fa`", parse_mode='Markdown')
 
-def extract_cookies(chat_id):
-    data = user_data.get(chat_id)
-    if not data:
-        return
-
-    username = data['username']
-    password = data['password']
-    two_fa_key = data['2fa_key']
-
+def extract_cookies(chat_id, username, password, two_fa_key):
     try:
         # ১. 2FA কোড জেনারেট করা (pyotp ব্যবহার করে)
         totp = pyotp.TOTP(two_fa_key.replace(" ", "")) # স্পেস থাকলে রিমুভ করে দেওয়া হলো
         two_fa_code = totp.now()
 
-        # ২. Instaloader ইনিশিয়ালাইজ করা
+        # ২. Instaloader ইনিশিয়ালাইজ করা (প্রতিটি থ্রেডের জন্য আলাদা)
         L = instaloader.Instaloader()
 
         # ৩. লগইন করার চেষ্টা
@@ -91,17 +84,15 @@ def extract_cookies(chat_id):
 
     except Exception as e:
         error_msg = (
-            f"❌ **Extraction Failed!**\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"Reason: `{str(e)}`\n\n"
-            f"💡 *টিপস:* আইপি ব্লক হলে Termux-এ ফ্লাইট মোড অন-অফ করে আবার চেষ্টা করুন।"
+            f"❌ **Failed:** `{username}`\n"
+            f"Reason: `{str(e)}`"
         )
         bot.send_message(chat_id, error_msg, parse_mode='Markdown')
 
 # বটকে লাইভ রাখার লুপ
 if __name__ == "__main__":
-    print("[+] Bot is running with token: " + TOKEN[:15] + "...")
-    print("[+] Auto-reconnect enabled. Waiting for commands...")
+    print("[+] MASS Extractor Bot is running...")
+    print("[+] Send multiple accounts in 'user|pass|2fa' format.")
     # নেটওয়ার্ক ড্রপ হলে যেন ক্র্যাশ না করে, তাই ইনফিনিট লুপ
     while True:
         try:
