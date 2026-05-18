@@ -291,14 +291,17 @@ def send_final_files(chat_id):
 
     bot.send_message(chat_id, "📦 *ফাইল তৈরি করা হচ্ছে, একটু অপেক্ষা করুন...*", parse_mode='Markdown')
 
-    def create_and_send(data_list, filename_prefix, caption_text):
+    def create_and_send(data_list, filename_prefix, caption_text, is_good_file=False):
         if not data_list: return # ডেটা না থাকলে ফাইল বানাবে না
         try:
             wb = openpyxl.Workbook()
             ws = wb.active
             for res in data_list:
-                combo_string = f"{res[0]}|{res[1]}|{res[2]}"
-                ws.append([combo_string]) # এক কলামেই সব ডেটা
+                if is_good_file:
+                    combo_string = f"{res[0]}|{res[1]}|{res[2]}"
+                    ws.append([combo_string]) # গুড ফাইলে এক কলামেই সব ডেটা
+                else:
+                    ws.append([res[0], res[1], res[2]]) # অন্যান্য ফাইলে কলাম A, B, C তে আলাদা আলাদা
             
             filename = f"{filename_prefix}_{chat_id}.xlsx"
             wb.save(filename)
@@ -308,11 +311,11 @@ def send_final_files(chat_id):
         except Exception as e:
             bot.send_message(chat_id, f"❌ {filename_prefix} ফাইল তৈরিতে এরর: {e}")
 
-    # ৪টি ফাইল নিখুঁতভাবে ডেলিভারি দেওয়া
-    create_and_send(session['good'], "Good_Accounts", f"✅ Good Accounts ({len(session['good'])})\n(Format: user|pass|cookies)")
-    create_and_send(session['bad'], "Bad_Accounts", f"❌ Failed Accounts ({len(session['bad'])})\n(Format: user|pass|2fa)")
-    create_and_send(session.get('suspended', []), "Suspended_Accounts", f"⚠️ Suspended/Checkpoint ({len(session.get('suspended', []))})\n(Format: user|pass|2fa)")
-    create_and_send(session['remaining'], "Remaining_Accounts", f"📦 Remaining (Unchecked) Accounts ({len(session['remaining'])})\n(Format: user|pass|2fa)")
+    # ৪টি ফাইল নিখুঁতভাবে ডেলিভারি দেওয়া (শুধুমাত্র গুড ফাইলে is_good_file=True পাঠানো হলো)
+    create_and_send(session['good'], "Good_Accounts", f"✅ Good Accounts ({len(session['good'])})\n(Format: user|pass|cookies)", is_good_file=True)
+    create_and_send(session['bad'], "Bad_Accounts", f"❌ Failed Accounts ({len(session['bad'])})\n(Format: Col A=User, Col B=Pass, Col C=2FA)")
+    create_and_send(session.get('suspended', []), "Suspended_Accounts", f"⚠️ Suspended/Checkpoint ({len(session.get('suspended', []))})\n(Format: Col A=User, Col B=Pass, Col C=2FA)")
+    create_and_send(session['remaining'], "Remaining_Accounts", f"📦 Remaining (Unchecked) Accounts ({len(session['remaining'])})\n(Format: Col A=User, Col B=Pass, Col C=2FA)")
 
     bot.send_message(chat_id, "🎉 *আপনার সবগুলো ফাইল সফলভাবে ডেলিভারি করা হয়েছে!*", parse_mode='Markdown')
     del user_sessions[chat_id] # কাজ শেষে সেশন ক্লিয়ার
