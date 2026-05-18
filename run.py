@@ -4,6 +4,7 @@ import instaloader
 import os
 import time
 import openpyxl
+import random
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from concurrent.futures import ThreadPoolExecutor
 
@@ -80,7 +81,7 @@ def handle_document(message):
             'remaining': valid_accounts.copy(), # যেগুলো বাকি আছে
             'good': [],
             'bad': [],
-            'is_processing': False,
+            'suspended': [],            'is_processing': False,
             'stop_requested': False
         }
 
@@ -151,42 +152,50 @@ def callback_query(call):
         )
 
         def worker(acc):
-            # যদি স্টপ বাটনে চাপ দেওয়া হয়, তবে সাথে সাথে স্কিপ করবে
-            if session.get('stop_requested'):
-                return 'skipped', None, acc
-
+            if session['stop_requested']:
+                return
+                
             username, password, two_fa = acc
             try:
                 totp = pyotp.TOTP(two_fa.replace(" ", ""))
-                code = totp.now()
+                two_fa_code = totp.now()
 
                 L = instaloader.Instaloader()
+                
+                # --- ১. লগইন চেক (Bad Account Filtering) ---
                 try:
                     L.login(username, password)
                 except instaloader.exceptions.TwoFactorAuthRequiredException:
-                    L.two_factor_login(code)
+                    L.two_factor_login(two_fa_code)
+                except Exception as e:
+                    # পাসওয়ার্ড ভুল বা আইপি ব্লক হলে এখানে আসবে
+                    session['bad'].append((username, password, two_fa))
+                    if acc in session['remaining']: session['remaining'].remove(acc)
+                    return
 
-                cookies = [f"{c.name}={c.value}" for c in L.context._session.cookies]
-                cookie_str = "; ".join(cookies)
-                return 'good', [username, password, cookie_str], acc
-            except Exception:
-                return 'bad', [username, password, two_fa], acc
+                # --- ২. লাইভ/সাসপেন্ড চেক (Suspended Account Filtering) ---
+                try:
+                    profile = instaloader.Profile.from_username(L.context, username)
+                    _ = profile.followers
+                except Exception:
+                    # লগইন হয়েছে কিন্তু প্রোফাইল লোড হয়নি মানে সাসপেন্ড/চেকপয়েন্ট
+                    session['suspended'].append((username, password, two_fa))
+                    if acc in session['remaining']: session['remaining'].remove(acc)
+                    return
 
-        # স্পিড ১৫ রাখা হয়েছে যাতে আইপি ব্লক না হয়
+                # --- ৩. সাকসেসফুল অ্যাকাউন্ট (Good Account) ---
+                cookie_items = [f"{cookie.name}={cookie.value}" for cookie in L.context._session.cookies]
+                raw_cookie_string = "; ".join(cookie_items)
+                session['good'].append((username, password, raw_cookie_string))
+                if acc in session['remaining']: session['remaining'].remove(acc)
+
+            except Exception as e:
+                # অন্য কোনো অপ্রত্যাশিত এরর
+                session['bad'].append((username, password, two_fa))
+                if acc in session['remaining']: session['remaining'].remove(acc)
+
         with ThreadPoolExecutor(max_workers=15) as executor:
-            results = list(executor.map(worker, batch))
-
-        for status, res_data, orig_acc in results:
-            if status != 'skipped':
-                # যেগুলো চেক হয়েছে, সেগুলো remaining লিস্ট থেকে মুছে ফেলা
-                if orig_acc in session['remaining']:
-                    session['remaining'].remove(orig_acc)
-                
-                # Good/Bad লিস্টে যোগ করা
-                if status == 'good':
-                    session['good'].append(res_data)
-                elif status == 'bad':
-                    session['bad'].append(res_data)
+            executor.map(worker, batch)
 
         session['is_processing'] = False
         remaining_count = len(session['remaining'])
@@ -205,7 +214,7 @@ def callback_query(call):
             bot.send_message(
                 chat_id,
                 f"⏸ *কাজ ম্যানুয়ালি থামানো হয়েছে!*\n"
-                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])}\n"
+                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Suspended: {len(session['suspended'])}\n"
                 f"📦 আনচেকড বাকি আছে: {remaining_count} টি\n\n"
                 f"👇 আপনি চাইলে ফাইলগুলো এখনই ডাউনলোড করতে পারেন, অথবা আইপি চেঞ্জ করে আবার Resume করতে পারেন:",
                 reply_markup=markup, parse_mode='Markdown'
@@ -216,7 +225,7 @@ def callback_query(call):
             bot.send_message(
                 chat_id, 
                 f"✅ *সবগুলো অ্যাকাউন্টের কাজ শেষ!*\n"
-                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])}\n\n"
+                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Suspended: {len(session['suspended'])}\n\n"
                 f"ফাইল পেতে নিচের বাটনে ক্লিক করুন:", 
                 reply_markup=markup, parse_mode='Markdown'
             )
@@ -227,7 +236,7 @@ def callback_query(call):
             bot.send_message(
                 chat_id,
                 f"⏸ *Batch Finished!*\n"
-                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])}\n"
+                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Suspended: {len(session['suspended'])}\n"
                 f"📦 আনচেকড বাকি আছে: {remaining_count} টি\n\n"
                 f"⚠️ *এখন আপনার ভিপিএন চেঞ্জ করুন বা Flight Mode অন-অফ করুন।*\n"
                 f"নতুন আইপি পেলে নিচের 'Start Next 50' বাটনে ক্লিক করুন:",
@@ -242,6 +251,7 @@ def send_final_files(chat_id):
 
     good_data = session['good']
     bad_data = session['bad']
+    susp_data = session.get('suspended', [])
     rem_data = session['remaining']
 
     # ১. Good File
@@ -267,21 +277,21 @@ def send_final_files(chat_id):
         bad_filename = f"Bad_Accounts_{chat_id}.xlsx"
         wb_bad.save(bad_filename)
         with open(bad_filename, "rb") as bf:
-            bot.send_document(chat_id, bf, caption=f"❌ Bad/Failed Accounts ({len(bad_data)})")
+            bot.send_document(chat_id, bf, caption=f"❌ Failed Accounts ({len(bad_data)})")
         os.remove(bad_filename)
-
-    # ৩. Remaining/Unchecked File
-    if rem_data:
-        wb_rem = openpyxl.Workbook()
-        ws_rem = wb_rem.active
-        ws_rem.append(["Username", "Password", "2FA Key"])
-        for res in rem_data:
-            ws_rem.append(res)
-        rem_filename = f"Remaining_Accounts_{chat_id}.xlsx"
-        wb_rem.save(rem_filename)
-        with open(rem_filename, "rb") as rf:
-            bot.send_document(chat_id, rf, caption=f"⏸ Unprocessed/Remaining Accounts ({len(rem_data)})\n(এই ফাইলটি আপনি পরে আবার আপলোড করে কাজ করতে পারবেন)")
-        os.remove(rem_filename)
+        
+    # ৩. Suspended File
+    if susp_data:
+        wb_susp = openpyxl.Workbook()
+        ws_susp = wb_susp.active
+        ws_susp.append(["Username", "Password", "2FA Key"])
+        for res in susp_data:
+            ws_susp.append(res)
+        susp_filename = f"Suspended_Accounts_{chat_id}.xlsx"
+        wb_susp.save(susp_filename)
+        with open(susp_filename, "rb") as sf:
+            bot.send_document(chat_id, sf, caption=f"⚠️ Suspended/Checkpoint ({len(susp_data)})")
+        os.remove(susp_filename)
 
     bot.send_message(chat_id, "🎉 *আপনার সবগুলো ফাইল সফলভাবে ডেলিভারি করা হয়েছে!*", parse_mode='Markdown')
     
