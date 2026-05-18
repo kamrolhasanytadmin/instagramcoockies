@@ -2,11 +2,18 @@ import telebot
 import pyotp
 import instaloader
 import os
+import sys
 import time
 import openpyxl
 import random
+import threading
+import logging
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from concurrent.futures import ThreadPoolExecutor
+
+# নেটওয়ার্ক ড্রপ বা ভিপিএন চেঞ্জের সময় বিশাল এরর মেসেজ হাইড করার জন্য
+telebot.logger.setLevel(logging.CRITICAL)
+logging.getLogger("urllib3").setLevel(logging.CRITICAL)
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -18,8 +25,8 @@ def show_banner():
 \033[1;32m      🔥 MASS IG COOKIE EXTRACTOR PRO 🔥
 \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 \033[1;33m[+] Developer : \033[1;37mKamrol
-\033[1;33m[+] Version   : \033[1;37m5.0 (Fail-Safe Batch & Perfect Files)
-\033[1;33m[+] Speed     : \033[1;37mMAX (50 IDs / Batch)
+\033[1;33m[+] Version   : \033[1;37m6.0 (Terminal Stop & VPN Safe)
+\033[1;33m[+] Features  : \033[1;37mAuto Reconnect, No Crash, Live Stop
 \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m
     """
     print(banner)
@@ -34,10 +41,9 @@ try:
     bot = telebot.TeleBot(TOKEN)
     bot_info = bot.get_me()
     print(f"\n\033[1;32m✅ Successfully Logged in as: @{bot_info.username}\033[0m")
-    print("\033[1;36m[*] Bot is running... Go to Telegram and send /start\033[0m")
 except Exception as e:
-    print("\n\033[1;31m❌ Invalid Token! Please check your token and run the script again.\033[0m")
-    exit()
+    print("\n\033[1;31m❌ Invalid Token! Please check your token and run again.\033[0m")
+    sys.exit()
 
 # ইউজারের ডেটা এবং সেশন সেভ রাখার ডিকশনারি
 user_sessions = {}
@@ -46,10 +52,10 @@ user_sessions = {}
 def send_welcome(message):
     chat_id = message.chat.id
     welcome_text = (
-        "🔥 *MASS IG Extractor PRO (Interactive & Safe)* 🔥\n"
+        "🔥 *MASS IG Extractor PRO (Terminal Safe)* 🔥\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "✅ *সেফ মোড অন:* নিজে ভিপিএন বদলে সেফলি কাজ করুন!\n"
-        "✅ *স্মার্ট ট্র্যাকিং:* Good, Bad, Suspended এবং Remaining ফাইল আলাদা পাবেন!\n\n"
+        "✅ *সেফ মোড অন:* ভিপিএন বদলে সেফলি কাজ করুন, বট ক্র্যাশ করবে না!\n"
+        "✅ *স্মার্ট ট্র্যাকিং:* Good, Bad, Suspended এবং Remaining ফাইল পাবেন!\n\n"
         "👉 আপনার `.xlsx` (Excel) ফাইলটি আপলোড করুন।\n"
         "• কলাম A = Username\n"
         "• কলাম B = Password\n"
@@ -92,7 +98,7 @@ def handle_document(message):
                 twofa = str(row[2]).strip()
                 
                 # হেডার স্কিপ করা
-                if user.lower() in ['username', 'user', 'id']:
+                if user.lower() in ['username', 'user', 'id', 'user name']:
                     continue
                     
                 valid_accounts.append((user, pwd, twofa))
@@ -114,12 +120,12 @@ def handle_document(message):
         }
 
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("▶️ Start First 50", callback_data="process_next"))
+        markup.add(InlineKeyboardButton("▶️ Start First 100", callback_data="process_next"))
         
         bot.send_message(
             chat_id, 
             f"✅ *ফাইল সফলভাবে রিসিভ হয়েছে!*\n📦 *সর্বমোট অ্যাকাউন্ট:* {len(valid_accounts)}\n\n"
-            f"👇 প্রথম ৫০টি অ্যাকাউন্টের কাজ শুরু করতে নিচের বাটনে ক্লিক করুন:", 
+            f"👇 প্রথম ১০০টি অ্যাকাউন্টের কাজ শুরু করতে নিচের বাটনে ক্লিক করুন:", 
             reply_markup=markup, parse_mode='Markdown'
         )
         
@@ -131,7 +137,11 @@ def callback_query(call):
     chat_id = call.message.chat.id
     data = call.data
     
-    bot.answer_callback_query(call.id)
+    # ভিপিএন চেঞ্জের পর নেটওয়ার্ক আনস্টেবল থাকলে বাটনের এরর স্কিপ করবে
+    try:
+        bot.answer_callback_query(call.id)
+    except:
+        pass
 
     if chat_id not in user_sessions:
         bot.send_message(chat_id, "❌ কোনো রানিং সেশন নেই। দয়া করে এক্সেল ফাইলটি আবার আপলোড করুন।")
@@ -150,11 +160,18 @@ def callback_query(call):
             )
         return
 
-    if data == "download_files":
+    if data == "download_files_pause":
         if session['is_processing']:
             bot.send_message(chat_id, "⚠️ কাজ রানিং অবস্থায় ফাইল ডাউনলোড করা যাবে না। আগে Stop করুন।")
             return
-        send_final_files(chat_id)
+        send_final_files(chat_id, is_final=False)
+        return
+
+    if data == "download_files_finish":
+        if session['is_processing']:
+            bot.send_message(chat_id, "⚠️ কাজ রানিং অবস্থায় ফাইল ডাউনলোড করা যাবে না। আগে Stop করুন।")
+            return
+        send_final_files(chat_id, is_final=True)
         return
 
     if data == "process_next":
@@ -164,11 +181,11 @@ def callback_query(call):
         session['is_processing'] = True
         session['stop_requested'] = False
         
-        # একদম নিখুঁত ব্যাচিং সিস্টেম (৫০টি কেটে নেওয়া হবে)
-        batch = session['remaining'][:50]
-        session['remaining'] = session['remaining'][50:] 
+        # ১০০টি কেটে নেওয়া হবে
+        batch = session['remaining'][:100]
+        session['remaining'] = session['remaining'][100:] 
         
-        unprocessed = [] # যেগুলো স্টপ করার কারণে চেক হবে না
+        unprocessed = [] 
 
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🛑 Stop Processing", callback_data="stop_batch"))
@@ -185,11 +202,10 @@ def callback_query(call):
                 return
                 
             username, password, two_fa = acc
-            # অ্যান্টি-ব্লক ডিলে (ইন্সটাগ্রাম যাতে সন্দেহ না করে)
-            time.sleep(random.uniform(0.5, 2.0))
+            # ইনস্টাগ্রাম যাতে সন্দেহ না করে তাই ছোট্ট একটি গ্যাপ
+            time.sleep(random.uniform(1.0, 3.0))
             
             try:
-                # 2FA জেনারেট
                 totp = pyotp.TOTP(two_fa.replace(" ", ""))
                 two_fa_code = totp.now()
 
@@ -199,8 +215,21 @@ def callback_query(call):
                     L.login(username, password)
                 except instaloader.exceptions.TwoFactorAuthRequiredException:
                     L.two_factor_login(two_fa_code)
+                except instaloader.exceptions.BadCredentialsException:
+                    session['bad'].append((username, password, two_fa))
+                    return
+                except instaloader.exceptions.ConnectionException:
+                    unprocessed.append(acc) # নেটওয়ার্ক এরর হলে আনচেকডে ফেরত যাবে
+                    return
+                except Exception as e:
+                    # নেটওয়ার্ক স্লো বা আপ-ডাউন করলে অ্যাকাউন্টের যাতে ক্ষতি না হয়
+                    if "connection" in str(e).lower() or "network" in str(e).lower() or "timeout" in str(e).lower():
+                        unprocessed.append(acc)
+                    else:
+                        session['bad'].append((username, password, two_fa))
+                    return
 
-                # --- LIVE CHECKER ---
+                # --- LIVE CHECKER (Suspended ID Bypass) ---
                 try:
                     profile = instaloader.Profile.from_username(L.context, username)
                     _ = profile.followers
@@ -229,14 +258,13 @@ def callback_query(call):
                 raw_cookie_string = "; ".join(final_cookies)
                 session['good'].append((username, password, raw_cookie_string))
 
-            except Exception as e:
+            except Exception:
                 session['bad'].append((username, password, two_fa))
 
-        # স্পিড ৩০ रखा হয়েছে যাতে ড্রপ না হয়
+        # স্পিড ব্যালেন্স করা হয়েছে (একসাথে ৩০টি রিকোয়েস্ট)
         with ThreadPoolExecutor(max_workers=30) as executor:
             executor.map(worker, batch)
 
-        # যেগুলো চেক হয়নি সেগুলো আবার রিমেইনিংয়ে ফেরত দেওয়া
         if unprocessed:
             session['remaining'] = unprocessed + session['remaining']
 
@@ -252,56 +280,58 @@ def callback_query(call):
         if session['stop_requested']:
             if remaining_count > 0:
                 markup.row(InlineKeyboardButton("▶️ Resume (Start Next)", callback_data="process_next"))
-            markup.row(InlineKeyboardButton("📥 Download Files", callback_data="download_files"))
+            markup.row(InlineKeyboardButton("📥 Download Backup (Pause)", callback_data="download_files_pause"))
+            markup.row(InlineKeyboardButton("⏹ Finish & Clear Session", callback_data="download_files_finish"))
             bot.send_message(
                 chat_id,
                 f"⏸ *কাজ ম্যানুয়ালি থামানো হয়েছে!*\n"
-                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Suspended: {len(session['suspended'])}\n"
+                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Susp: {len(session['suspended'])}\n"
                 f"📦 আনচেকড বাকি আছে: {remaining_count} টি\n\n"
                 f"👇 ফাইল ডাউনলোড করুন অথবা আইপি চেঞ্জ করে Resume করুন:",
                 reply_markup=markup, parse_mode='Markdown'
             )
             
         elif remaining_count == 0:
-            markup.add(InlineKeyboardButton("📥 Download Files", callback_data="download_files"))
+            markup.add(InlineKeyboardButton("📥 Download Final Files", callback_data="download_files_finish"))
             bot.send_message(
                 chat_id, 
                 f"✅ *সবগুলো অ্যাকাউন্টের কাজ শেষ!*\n"
-                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Suspended: {len(session['suspended'])}\n\n"
+                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Susp: {len(session['suspended'])}\n\n"
                 f"ফাইল পেতে নিচের বাটনে ক্লিক করুন:", 
                 reply_markup=markup, parse_mode='Markdown'
             )
             
         else:
-            markup.row(InlineKeyboardButton("▶️ Start Next 50", callback_data="process_next"))
-            markup.row(InlineKeyboardButton("📥 Download Files (Pause)", callback_data="download_files"))
+            markup.row(InlineKeyboardButton("▶️ Start Next 100", callback_data="process_next"))
+            markup.row(InlineKeyboardButton("📥 Download Backup (Pause)", callback_data="download_files_pause"))
+            markup.row(InlineKeyboardButton("⏹ Finish & Clear Session", callback_data="download_files_finish"))
             bot.send_message(
                 chat_id,
                 f"⏸ *Batch Finished!*\n"
-                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Suspended: {len(session['suspended'])}\n"
+                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Susp: {len(session['suspended'])}\n"
                 f"📦 আনচেকড বাকি আছে: {remaining_count} টি\n\n"
                 f"⚠️ *এখন আপনার ভিপিএন চেঞ্জ করুন বা Flight Mode অন-অফ করুন।*\n"
                 f"নতুন আইপি পেলে নিচের বাটনে ক্লিক করুন:",
                 reply_markup=markup, parse_mode='Markdown'
             )
 
-def send_final_files(chat_id):
+def send_final_files(chat_id, is_final=True):
     session = user_sessions.get(chat_id)
     if not session: return
 
     bot.send_message(chat_id, "📦 *ফাইল তৈরি করা হচ্ছে, একটু অপেক্ষা করুন...*", parse_mode='Markdown')
 
     def create_and_send(data_list, filename_prefix, caption_text, is_good_file=False):
-        if not data_list: return # ডেটা না থাকলে ফাইল বানাবে না
+        if not data_list: return 
         try:
             wb = openpyxl.Workbook()
             ws = wb.active
             for res in data_list:
                 if is_good_file:
                     combo_string = f"{res[0]}|{res[1]}|{res[2]}"
-                    ws.append([combo_string]) # গুড ফাইলে এক কলামেই সব ডেটা
+                    ws.append([combo_string]) 
                 else:
-                    ws.append([res[0], res[1], res[2]]) # অন্যান্য ফাইলে কলাম A, B, C তে আলাদা আলাদা
+                    ws.append([res[0], res[1], res[2]]) 
             
             filename = f"{filename_prefix}_{chat_id}.xlsx"
             wb.save(filename)
@@ -309,20 +339,43 @@ def send_final_files(chat_id):
                 bot.send_document(chat_id, f, caption=caption_text)
             os.remove(filename)
         except Exception as e:
-            bot.send_message(chat_id, f"❌ {filename_prefix} ফাইল তৈরিতে এরর: {e}")
+            pass
 
-    # ৪টি ফাইল নিখুঁতভাবে ডেলিভারি দেওয়া (শুধুমাত্র গুড ফাইলে is_good_file=True পাঠানো হলো)
     create_and_send(session['good'], "Good_Accounts", f"✅ Good Accounts ({len(session['good'])})\n(Format: user|pass|cookies)", is_good_file=True)
     create_and_send(session['bad'], "Bad_Accounts", f"❌ Failed Accounts ({len(session['bad'])})\n(Format: Col A=User, Col B=Pass, Col C=2FA)")
     create_and_send(session.get('suspended', []), "Suspended_Accounts", f"⚠️ Suspended/Checkpoint ({len(session.get('suspended', []))})\n(Format: Col A=User, Col B=Pass, Col C=2FA)")
     create_and_send(session['remaining'], "Remaining_Accounts", f"📦 Remaining (Unchecked) Accounts ({len(session['remaining'])})\n(Format: Col A=User, Col B=Pass, Col C=2FA)")
 
-    bot.send_message(chat_id, "🎉 *আপনার সবগুলো ফাইল সফলভাবে ডেলিভারি করা হয়েছে!*", parse_mode='Markdown')
-    del user_sessions[chat_id] # কাজ শেষে সেশন ক্লিয়ার
+    if is_final:
+        bot.send_message(chat_id, "🎉 *আপনার সবগুলো ফাইল সফলভাবে ডেলিভারি করা হয়েছে!*\n(বর্তমান সেশনটি ক্লিয়ার করা হলো, নতুন ফাইল দিতে পারেন)", parse_mode='Markdown')
+        del user_sessions[chat_id] 
+    else:
+        bot.send_message(chat_id, "⏸ *আপনার বর্তমান কাজের ব্যাকআপ ফাইল দেওয়া হয়েছে!*\n(সেশন সেভ আছে, আপনি চাইলে Start Next দিয়ে আবার কন্টিনিউ করতে পারবেন)", parse_mode='Markdown')
 
-if __name__ == "__main__":
+# --- ব্যাকগ্রাউন্ড থ্রেড সিস্টেম (যাতে টার্মিনাল ক্র্যাশ না করে) ---
+def start_bot_polling():
     while True:
         try:
-            bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
-        except Exception as e:
-            time.sleep(5)
+            bot.polling(none_stop=True, interval=0, timeout=20)
+        except Exception:
+            time.sleep(3) # ভিপিএন চেঞ্জ করলে চুপচাপ রিকানেক্ট হবে
+
+polling_thread = threading.Thread(target=start_bot_polling)
+polling_thread.daemon = True
+polling_thread.start()
+
+print("\n\033[1;36m[*] Bot is running in Background... Safe to change VPN!\033[0m")
+print("\033[1;33m[!] Type \033[1;31m/stop\033[1;33m and press Enter to shut down the bot.\033[0m\n")
+
+# --- টার্মিনাল কীবোর্ড কন্ট্রোলার ---
+while True:
+    try:
+        user_input = input().strip().lower()
+        if user_input in ['/stop', 'stop', 'exit', 'quit']:
+            print("\n\033[1;31m🛑 Shutting down bot gracefully... Please wait.\033[0m")
+            bot.stop_polling()
+            print("\033[1;32m✅ Bot Stopped Successfully! Termux session closed.\033[0m")
+            sys.exit(0)
+    except (KeyboardInterrupt, EOFError):
+        print("\n\033[1;31m🛑 Termux session interrupted. Bot stopped.\033[0m")
+        sys.exit(0)
