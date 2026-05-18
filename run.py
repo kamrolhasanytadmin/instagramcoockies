@@ -18,7 +18,7 @@ def show_banner():
 \033[1;32m      🔥 MASS IG COOKIE EXTRACTOR PRO 🔥
 \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 \033[1;33m[+] Developer : \033[1;37mKamrol
-\033[1;33m[+] Version   : \033[1;37m4.0 (Interactive VPN & Live Check)
+\033[1;33m[+] Version   : \033[1;37m5.0 (Fail-Safe Batch & Perfect Files)
 \033[1;33m[+] Speed     : \033[1;37mMAX (50 IDs / Batch)
 \033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m
     """
@@ -49,8 +49,7 @@ def send_welcome(message):
         "🔥 *MASS IG Extractor PRO (Interactive & Safe)* 🔥\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "✅ *সেফ মোড অন:* নিজে ভিপিএন বদলে সেফলি কাজ করুন!\n"
-        "✅ *সুপার ফাস্ট স্পিড:* একসাথে ৫০টি আইডির কাজ চোখের পলকে!\n"
-        "✅ *স্মার্ট ট্র্যাকিং:* আনচেকড (Remaining) আইডিগুলো আলাদা ফাইলে পাবেন।\n\n"
+        "✅ *স্মার্ট ট্র্যাকিং:* Good, Bad, Suspended এবং Remaining ফাইল আলাদা পাবেন!\n\n"
         "👉 আপনার `.xlsx` (Excel) ফাইলটি আপলোড করুন।\n"
         "• কলাম A = Username\n"
         "• কলাম B = Password\n"
@@ -146,7 +145,7 @@ def callback_query(call):
             bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=call.message.message_id,
-                text="🛑 *Stopping...*\n(দয়া করে কয়েক সেকেন্ড অপেক্ষা করুন, কাজ থামানো হচ্ছে...)",
+                text="🛑 *Stopping...*\n(দয়া করে কয়েক সেকেন্ড অপেক্ষা করুন, রানিং কাজগুলো সেভ হচ্ছে...)",
                 parse_mode='Markdown'
             )
         return
@@ -165,8 +164,11 @@ def callback_query(call):
         session['is_processing'] = True
         session['stop_requested'] = False
         
-        # ৫০টি আইডি নেওয়া
+        # একদম নিখুঁত ব্যাচিং সিস্টেম (৫০টি কেটে নেওয়া হবে)
         batch = session['remaining'][:50]
+        session['remaining'] = session['remaining'][50:] 
+        
+        unprocessed = [] # যেগুলো স্টপ করার কারণে চেক হবে না
 
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🛑 Stop Processing", callback_data="stop_batch"))
@@ -179,9 +181,13 @@ def callback_query(call):
 
         def worker(acc):
             if session['stop_requested']:
+                unprocessed.append(acc)
                 return
                 
             username, password, two_fa = acc
+            # অ্যান্টি-ব্লক ডিলে (ইন্সটাগ্রাম যাতে সন্দেহ না করে)
+            time.sleep(random.uniform(0.5, 2.0))
+            
             try:
                 # 2FA জেনারেট
                 totp = pyotp.TOTP(two_fa.replace(" ", ""))
@@ -193,25 +199,17 @@ def callback_query(call):
                     L.login(username, password)
                 except instaloader.exceptions.TwoFactorAuthRequiredException:
                     L.two_factor_login(two_fa_code)
-                except Exception as e:
-                    # পাসওয়ার্ড ভুল বা নেটওয়ার্ক এরর
-                    session['bad'].append((username, password, two_fa))
-                    if acc in session['remaining']: session['remaining'].remove(acc)
-                    return
 
-                # --- LIVE CHECKER (অ্যাকাউন্ট সাসপেন্ড কি না চেক করা) ---
+                # --- LIVE CHECKER ---
                 try:
                     profile = instaloader.Profile.from_username(L.context, username)
-                    _ = profile.followers # প্রোফাইল লোড হলে এটি লাইভ
+                    _ = profile.followers
                 except Exception:
-                    # প্রোফাইল লোড না হলে সেটি সাসপেন্ড বা চেকপয়েন্ট
                     session['suspended'].append((username, password, two_fa))
-                    if acc in session['remaining']: session['remaining'].remove(acc)
                     return
 
-                # --- PERFECT COOKIE FORMATTING ---
+                # --- PERFECT COOKIES ---
                 cookie_dict = {cookie.name: cookie.value for cookie in L.context._session.cookies}
-                
                 if 'datr' not in cookie_dict:
                     cookie_dict['datr'] = 'HS3naU6ORdMLlg8ma6NYa3hy'
                 if 'wd' not in cookie_dict:
@@ -220,7 +218,6 @@ def callback_query(call):
                     cookie_dict['dpr'] = '2.15625'
                 
                 keys_order = ['datr', 'ig_did', 'mid', 'dpr', 'csrftoken', 'ds_user_id', 'sessionid', 'wd', 'rur']
-                
                 final_cookies = []
                 for k in keys_order:
                     if k in cookie_dict:
@@ -230,16 +227,18 @@ def callback_query(call):
                         final_cookies.append(f"{k}={v}")
                         
                 raw_cookie_string = "; ".join(final_cookies)
-                
                 session['good'].append((username, password, raw_cookie_string))
-                if acc in session['remaining']: session['remaining'].remove(acc)
 
             except Exception as e:
                 session['bad'].append((username, password, two_fa))
-                if acc in session['remaining']: session['remaining'].remove(acc)
 
-        with ThreadPoolExecutor(max_workers=50) as executor:
+        # স্পিড ৩০ रखा হয়েছে যাতে ড্রপ না হয়
+        with ThreadPoolExecutor(max_workers=30) as executor:
             executor.map(worker, batch)
+
+        # যেগুলো চেক হয়নি সেগুলো আবার রিমেইনিংয়ে ফেরত দেওয়া
+        if unprocessed:
+            session['remaining'] = unprocessed + session['remaining']
 
         session['is_processing'] = False
         remaining_count = len(session['remaining'])
@@ -251,7 +250,8 @@ def callback_query(call):
         markup = InlineKeyboardMarkup()
         
         if session['stop_requested']:
-            markup.row(InlineKeyboardButton("▶️ Resume (Start Next)", callback_data="process_next"))
+            if remaining_count > 0:
+                markup.row(InlineKeyboardButton("▶️ Resume (Start Next)", callback_data="process_next"))
             markup.row(InlineKeyboardButton("📥 Download Files", callback_data="download_files"))
             bot.send_message(
                 chat_id,
@@ -291,65 +291,31 @@ def send_final_files(chat_id):
 
     bot.send_message(chat_id, "📦 *ফাইল তৈরি করা হচ্ছে, একটু অপেক্ষা করুন...*", parse_mode='Markdown')
 
-    good_data = session['good']
-    bad_data = session['bad']
-    susp_data = session.get('suspended', [])
-    rem_data = session['remaining']
+    def create_and_send(data_list, filename_prefix, caption_text):
+        if not data_list: return # ডেটা না থাকলে ফাইল বানাবে না
+        try:
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            for res in data_list:
+                combo_string = f"{res[0]}|{res[1]}|{res[2]}"
+                ws.append([combo_string]) # এক কলামেই সব ডেটা
+            
+            filename = f"{filename_prefix}_{chat_id}.xlsx"
+            wb.save(filename)
+            with open(filename, "rb") as f:
+                bot.send_document(chat_id, f, caption=caption_text)
+            os.remove(filename)
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ {filename_prefix} ফাইল তৈরিতে এরর: {e}")
 
-    # Good File (1 Column: user|pass|cookies)
-    if good_data:
-        wb_good = openpyxl.Workbook()
-        ws_good = wb_good.active
-        for res in good_data:
-            combo_string = f"{res[0]}|{res[1]}|{res[2]}"
-            ws_good.append([combo_string])
-        good_filename = f"Good_Accounts_{chat_id}.xlsx"
-        wb_good.save(good_filename)
-        with open(good_filename, "rb") as gf:
-            bot.send_document(chat_id, gf, caption=f"✅ Good Accounts ({len(good_data)})\n(Format: user|pass|cookies)")
-        os.remove(good_filename)
-        
-    # Bad File (1 Column: user|pass|2fa)
-    if bad_data:
-        wb_bad = openpyxl.Workbook()
-        ws_bad = wb_bad.active
-        for res in bad_data:
-            combo_string = f"{res[0]}|{res[1]}|{res[2]}"
-            ws_bad.append([combo_string])
-        bad_filename = f"Bad_Accounts_{chat_id}.xlsx"
-        wb_bad.save(bad_filename)
-        with open(bad_filename, "rb") as bf:
-            bot.send_document(chat_id, bf, caption=f"❌ Failed Accounts ({len(bad_data)})\n(Format: user|pass|2fa)")
-        os.remove(bad_filename)
-        
-    # Suspended File (1 Column: user|pass|2fa)
-    if susp_data:
-        wb_susp = openpyxl.Workbook()
-        ws_susp = wb_susp.active
-        for res in susp_data:
-            combo_string = f"{res[0]}|{res[1]}|{res[2]}"
-            ws_susp.append([combo_string])
-        susp_filename = f"Suspended_Accounts_{chat_id}.xlsx"
-        wb_susp.save(susp_filename)
-        with open(susp_filename, "rb") as sf:
-            bot.send_document(chat_id, sf, caption=f"⚠️ Suspended/Checkpoint ({len(susp_data)})\n(Format: user|pass|2fa)")
-        os.remove(susp_filename)
-        
-    # Remaining File (1 Column: user|pass|2fa)
-    if rem_data:
-        wb_rem = openpyxl.Workbook()
-        ws_rem = wb_rem.active
-        for res in rem_data:
-            combo_string = f"{res[0]}|{res[1]}|{res[2]}"
-            ws_rem.append([combo_string])
-        rem_filename = f"Remaining_Accounts_{chat_id}.xlsx"
-        wb_rem.save(rem_filename)
-        with open(rem_filename, "rb") as rf:
-            bot.send_document(chat_id, rf, caption=f"📦 Remaining (Unchecked) Accounts ({len(rem_data)})\n(Format: user|pass|2fa)")
-        os.remove(rem_filename)
+    # ৪টি ফাইল নিখুঁতভাবে ডেলিভারি দেওয়া
+    create_and_send(session['good'], "Good_Accounts", f"✅ Good Accounts ({len(session['good'])})\n(Format: user|pass|cookies)")
+    create_and_send(session['bad'], "Bad_Accounts", f"❌ Failed Accounts ({len(session['bad'])})\n(Format: user|pass|2fa)")
+    create_and_send(session.get('suspended', []), "Suspended_Accounts", f"⚠️ Suspended/Checkpoint ({len(session.get('suspended', []))})\n(Format: user|pass|2fa)")
+    create_and_send(session['remaining'], "Remaining_Accounts", f"📦 Remaining (Unchecked) Accounts ({len(session['remaining'])})\n(Format: user|pass|2fa)")
 
     bot.send_message(chat_id, "🎉 *আপনার সবগুলো ফাইল সফলভাবে ডেলিভারি করা হয়েছে!*", parse_mode='Markdown')
-    del user_sessions[chat_id] # সেশন ডিলিট
+    del user_sessions[chat_id] # কাজ শেষে সেশন ক্লিয়ার
 
 if __name__ == "__main__":
     while True:
