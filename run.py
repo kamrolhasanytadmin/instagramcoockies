@@ -116,6 +116,48 @@ def handle_document(message):
     except Exception as e:
         bot.send_message(chat_id, f"❌ ফাইল রিড করতে সমস্যা হয়েছে: {e}")
 
+@bot.message_handler(content_types=['text'])
+def handle_text(message):
+    chat_id = message.chat.id
+    text = message.text.strip()
+    
+    if text.startswith('/'):
+        return
+
+    if chat_id in user_sessions and user_sessions[chat_id].get('is_processing'):
+        bot.send_message(chat_id, "⚠️ আপনার একটি কাজ রানিং আছে! আগে সেটি Stop করুন।")
+        return
+
+    lines = text.split('\n')
+    valid_accounts = []
+    
+    for line in lines:
+        parts = line.split('|')
+        if len(parts) >= 3:
+            user = parts[0].strip()
+            if user.lower() in ['username', 'user', 'id', 'user name']: continue
+            valid_accounts.append((user, parts[1].strip(), parts[2].strip()))
+
+    if not valid_accounts:
+        bot.send_message(chat_id, "❌ কোনো সঠিক ডেটা পাওয়া যায়নি! দয়া করে user|pass|2fa ফরম্যাটে দিন।")
+        return
+
+    user_sessions[chat_id] = {
+        'remaining': valid_accounts.copy(),
+        'good': [], 'bad': [], 'suspended': [],            
+        'is_processing': False, 'stop_requested': False
+    }
+
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("▶️ Start Accounts", callback_data="start_batch"))
+    
+    bot.send_message(
+        chat_id, 
+        f"✅ *টেক্সট রিসিভ হয়েছে!*\n📦 *অ্যাকাউন্ট:* {len(valid_accounts)}\n\n"
+        f"👇 কাজ শুরু করতে নিচের বাটনে ক্লিক করুন:", 
+        reply_markup=markup, parse_mode='Markdown'
+    )
+
 def batch_processor(chat_id):
     session = user_sessions[chat_id]
     session['is_processing'] = True
