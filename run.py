@@ -188,7 +188,8 @@ def batch_processor(chat_id):
             return
             
         username, password, two_fa = acc
-        time.sleep(random.uniform(1.0, 2.5)) # অ্যান্টি-স্প্যাম গ্যাপ (খুব জরুরি)
+        # স্পিড সুপারফাস্ট করার জন্য ওয়েটিং টাইম একদম কমিয়ে দেওয়া হলো
+        time.sleep(random.uniform(0.01, 0.1)) 
         
         try:
             totp = pyotp.TOTP(two_fa.replace(" ", ""))
@@ -234,8 +235,8 @@ def batch_processor(chat_id):
         except Exception:
             session['bad'].append(acc)
 
-    # স্পিড ব্যালেন্স করা হয়েছে (১৫) যাতে মোবাইল ডেটা ক্র্যাশ না করে
-    with ThreadPoolExecutor(max_workers=15) as executor:
+    # স্পিড ৫০ থেকে বাড়িয়ে ১০০ করা হলো (সুপার রকেট স্পিড)
+    with ThreadPoolExecutor(max_workers=100) as executor:
         executor.map(worker, batch)
 
     if unprocessed:
