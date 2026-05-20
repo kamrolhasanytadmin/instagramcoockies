@@ -123,15 +123,27 @@ def handle_document(message):
         
         valid_accounts = []
         for row in sheet.iter_rows(values_only=True):
-            if len(row) >= 3 and row[0] and row[1] and row[2]:
-                user = str(row[0]).strip()
-                if user.lower() in ['username', 'user', 'id', 'user name']: continue
-                valid_accounts.append((user, str(row[1]).strip(), str(row[2]).strip()))
+            if not row: continue
+            
+            # সেল ফাঁকা থাকলে None আসে, তাই সাবধানে স্ট্রিং এ কনভার্ট করা
+            col1 = str(row[0]).strip() if len(row) > 0 and row[0] is not None else ""
+            col2 = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
+            col3 = str(row[2]).strip() if len(row) > 2 and row[2] is not None else ""
+            
+            # যদি কেউ ভুল করে Column A তেই "user|pass|2fa" একসাথে দিয়ে রাখে, তবে সেটাকে ভেঙে ৩ কলাম করা
+            if col1 and not col2 and not col3 and '|' in col1:
+                parts = col1.split('|', 2)
+                if len(parts) == 3:
+                    col1, col2, col3 = parts[0].strip(), parts[1].strip(), parts[2].strip()
+
+            if col1 and col2 and col3:
+                if col1.lower() in ['username', 'user', 'id', 'user name']: continue
+                valid_accounts.append((col1, col2, col3))
 
         os.remove(input_filename)
 
         if not valid_accounts:
-            bot.send_message(chat_id, "❌ ফাইলে কোনো সঠিক ডেটা পাওয়া যায়নি!")
+            bot.send_message(chat_id, "❌ ফাইলে কোনো সঠিক ডেটা পাওয়া যায়নি! দয়া করে Excel ফাইলের কলাম A, B, C তে ডাটা দিন অথবা user|pass|2fa ফরম্যাটে দিন।")
             return
 
         user_sessions[chat_id] = {
