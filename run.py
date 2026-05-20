@@ -8,7 +8,7 @@ import openpyxl
 import random
 import threading
 import logging
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from concurrent.futures import ThreadPoolExecutor
 
 # নেটওয়ার্ক ড্রপ বা ভিপিএন চেঞ্জের সময় বিশাল এরর মেসেজ হাইড করার জন্য
@@ -58,7 +58,11 @@ def send_welcome(message):
         "👉 আপনার `.xlsx` (Excel) ফাইলটি আপলোড করুন।\n"
         "• কলাম A = Username | কলাম B = Pass | কলাম C = 2FA Key\n"
     )
-    bot.send_message(chat_id, welcome_text, parse_mode='Markdown')
+    
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton("📥 Submit TXT to Excel"))
+    
+    bot.send_message(chat_id, welcome_text, reply_markup=markup, parse_mode='Markdown')
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
@@ -69,8 +73,41 @@ def handle_document(message):
 
     try:
         file_name = message.document.file_name.lower()
+        
+        # --- TXT to XLSX Converter Logic ---
+        if file_name.endswith('.txt'):
+            bot.send_message(chat_id, "📥 TXT ফাইল রিসিভ হয়েছে, Excel এ কনভার্ট করা হচ্ছে...")
+            file_info = bot.get_file(message.document.file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
+            
+            try:
+                lines = downloaded_file.decode('utf-8').splitlines()
+            except UnicodeDecodeError:
+                bot.send_message(chat_id, "❌ ফাইলের টেক্সট ফরম্যাট সঠিক নয় (UTF-8 প্রয়োজন)।")
+                return
+            
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            
+            for line in lines:
+                line = line.strip()
+                if not line: continue
+                # | দিয়ে সর্বোচ্চ ৩ ভাগে ভাগ করবে (username, password, cookies)
+                parts = line.split('|', 2) 
+                if len(parts) == 3:
+                    ws.append([parts[0].strip(), parts[1].strip(), parts[2].strip()])
+                else:
+                    ws.append(parts)
+                    
+            out_filename = f"Converted_{chat_id}.xlsx"
+            wb.save(out_filename)
+            with open(out_filename, "rb") as f:
+                bot.send_document(chat_id, f, caption="✅ *Converted Excel File*\nকলাম A = Username\nকলাম B = Password\nকলাম C = Cookies", parse_mode='Markdown')
+            os.remove(out_filename)
+            return
+
         if not file_name.endswith('.xlsx'):
-            bot.send_message(chat_id, "❌ দয়া করে শুধুমাত্র .xlsx (Excel) ফাইল আপলোড করুন!")
+            bot.send_message(chat_id, "❌ দয়া করে শুধুমাত্র .xlsx (Excel) বা .txt ফাইল আপলোড করুন!")
             return
 
         bot.send_message(chat_id, "📥 ফাইল রিসিভ হচ্ছে, একটু অপেক্ষা করুন...")
@@ -121,6 +158,10 @@ def handle_text(message):
     chat_id = message.chat.id
     text = message.text.strip()
     
+    if text == "📥 Submit TXT to Excel":
+        bot.send_message(chat_id, "👉 আপনার `username|password|cookies` ফরম্যাটের `.txt` ফাইলটি এখানে আপলোড করুন।\n\nআমি সেটি Excel (.xlsx) ফাইলে কনভার্ট করে দেবো, যেখানে ৩টি কলাম (A, B, C) থাকবে।")
+        return
+        
     if text.startswith('/'):
         return
 
