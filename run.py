@@ -199,8 +199,26 @@ def batch_processor(chat_id):
                 L.login(username, password)
             except instaloader.exceptions.TwoFactorAuthRequiredException:
                 L.two_factor_login(two_fa_code)
+            except instaloader.exceptions.BadCredentialsException:
+                session['bad'].append(acc)
+                return
+            except instaloader.exceptions.ConnectionException as e:
+                # Checkpoint বা Suspended এরর ধরবে
+                err_msg = str(e).lower()
+                if "challenge" in err_msg or "checkpoint" in err_msg or "suspended" in err_msg or "login_required" in err_msg:
+                    session['suspended'].append(acc)
+                else:
+                    session['bad'].append(acc)
+                return
             except Exception:
                 session['bad'].append(acc)
+                return
+
+            # ১০০% ওয়ার্কিং কুকি চেক: 'sessionid' না থাকলে আইডি সাসপেন্ড বা চেকপয়েন্টে আছে!
+            cookie_dict = {cookie.name: cookie.value for cookie in L.context._session.cookies}
+            
+            if 'sessionid' not in cookie_dict:
+                session['suspended'].append(acc)
                 return
 
             try:
@@ -212,7 +230,6 @@ def batch_processor(chat_id):
             except Exception:
                 pass
 
-            cookie_dict = {cookie.name: cookie.value for cookie in L.context._session.cookies}
             if 'datr' not in cookie_dict: cookie_dict['datr'] = 'CVTqaVVElLHF6TC46birRObC'
             if 'wd' not in cookie_dict: cookie_dict['wd'] = f"{random.randint(360, 501)}x{random.randint(700, 954)}"
             if 'dpr' not in cookie_dict: cookie_dict['dpr'] = '2.15625'
