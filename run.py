@@ -10,6 +10,21 @@ import threading
 import logging
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from concurrent.futures import ThreadPoolExecutor
+import requests
+import urllib.request
+
+def is_internet_working():
+    try:
+        urllib.request.urlopen('https://api.telegram.org', timeout=5)
+        return True
+    except:
+        return False
+
+class MyExceptionHandler(telebot.ExceptionHandler):
+    def handle(self, exception):
+        logging.error(f"Global Exception: {exception}")
+        print(f"\n\033[1;31m[!] Telegram Bot Exception: {exception}\033[0m")
+        return True
 
 # নেটওয়ার্ক ড্রপ বা ভিপিএন চেঞ্জের সময় বিশাল এরর মেসেজ হাইড করার জন্য
 telebot.logger.setLevel(logging.CRITICAL)
@@ -37,14 +52,23 @@ while True:
     if TOKEN:
         break
 
-try:
-    bot = telebot.TeleBot(TOKEN)
-    bot_info = bot.get_me()
-    print(f"\n\033[1;32m✅ Successfully Logged in as: @{bot_info.username}\033[0m")
-    print("\033[1;33m[!] Type \033[1;31m/stop\033[1;33m in terminal to shut down the bot.\033[0m\n")
-except Exception as e:
-    print("\n\033[1;31m❌ Invalid Token! Please check your token and run again.\033[0m")
-    sys.exit()
+while True:
+    try:
+        bot = telebot.TeleBot(TOKEN, exception_handler=MyExceptionHandler())
+        bot_info = bot.get_me()
+        print(f"\n\033[1;32m✅ Successfully Logged in as: @{bot_info.username}\033[0m")
+        print("\033[1;33m[!] Type \033[1;31m/stop\033[1;33m in terminal to shut down the bot.\033[0m\n")
+        break
+    except telebot.apihelper.ApiTelegramException as e:
+        if e.error_code in [401, 404]:
+            print("\n\033[1;31m❌ Invalid Token! Please check your token and run again.\033[0m")
+            sys.exit()
+        else:
+            print(f"\n\033[1;33m⚠️ Telegram API Error ({e.error_code}): {e.description}. Retrying in 5 seconds...\033[0m")
+            time.sleep(5)
+    except (requests.exceptions.RequestException, Exception) as e:
+        print(f"\n\033[1;33m⚠️ Connection failed! Check your internet or VPN. Retrying in 5 seconds... ({e})\033[0m")
+        time.sleep(5)
 
 user_sessions = {}
 
@@ -149,17 +173,16 @@ def handle_document(message):
         user_sessions[chat_id] = {
             'remaining': valid_accounts.copy(),
             'good': [], 'bad': [], 'suspended': [],            
-            'is_processing': False, 'stop_requested': False
+            'is_processing': False, 'stop_requested': False,
+            'batch_size': 100,
+            'waiting_for_batch_size': True
         }
 
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("▶️ Start 100 Accounts", callback_data="start_batch"))
-        
         bot.send_message(
             chat_id, 
-            f"✅ *ফাইল রিসিভ হয়েছে!*\n📦 *অ্যাকাউন্ট:* {len(valid_accounts)}\n\n"
-            f"👇 কাজ শুরু করতে নিচের বাটনে ক্লিক করুন:", 
-            reply_markup=markup, parse_mode='Markdown'
+            f"✅ *ফাইল রিসিভ হয়েছে!*\n📦 *মোট অ্যাকাউন্ট:* {len(valid_accounts)}\n\n"
+            f"👉 আপনি একবারে কয়টি অ্যাকাউন্ট চেক করতে চান? (Batch Size সংখ্যায় লিখুন, যেমন: 100 বা 500 বা 1000):",
+            parse_mode='Markdown'
         )
         
     except Exception as e:
@@ -181,6 +204,25 @@ def handle_text(message):
         bot.send_message(chat_id, "⚠️ আপনার একটি কাজ রানিং আছে! আগে সেটি Stop করুন।")
         return
 
+    # যদি সেশন থাকে এবং বটের কাছ থেকে ব্যাচ সাইজ আশা করা হচ্ছে, আর ব্যবহারকারী সংখ্যা পাঠায়
+    if chat_id in user_sessions and user_sessions[chat_id].get('waiting_for_batch_size') and text.isdigit():
+        b_size = int(text)
+        if b_size <= 0:
+            bot.send_message(chat_id, "❌ ব্যাচ সাইজ অবশ্যই ১ বা তার বেশি হতে হবে! দয়া করে সঠিক সংখ্যা লিখুন:")
+            return
+        user_sessions[chat_id]['batch_size'] = b_size
+        user_sessions[chat_id]['waiting_for_batch_size'] = False
+        
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton(f"▶️ Start {b_size} Accounts", callback_data="start_batch"))
+        bot.send_message(
+            chat_id,
+            f"✅ *ব্যাচ সাইজ সেট করা হয়েছে:* {b_size}\n\n👇 কাজ শুরু করতে নিচের বাটনে ক্লিক করুন:",
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+        return
+
     lines = text.split('\n')
     valid_accounts = []
     
@@ -192,138 +234,169 @@ def handle_text(message):
             valid_accounts.append((user, parts[1].strip(), parts[2].strip()))
 
     if not valid_accounts:
-        bot.send_message(chat_id, "❌ কোনো সঠিক ডেটা পাওয়া যায়নি! দয়া করে user|pass|2fa ফরম্যাটে দিন।")
+        if chat_id in user_sessions and user_sessions[chat_id].get('waiting_for_batch_size'):
+            bot.send_message(chat_id, "❌ দয়া করে শুধুমাত্র একটি সংখ্যা লিখুন (যেমন: 100, 500 বা 1000) অথবা সঠিক ফরম্যাটে অ্যাকাউন্ট পেস্ট করুন।")
+        else:
+            bot.send_message(chat_id, "❌ কোনো সঠিক ডেটা পাওয়া যায়নি! দয়া করে user|pass|2fa ফরম্যাটে দিন।")
         return
 
     user_sessions[chat_id] = {
         'remaining': valid_accounts.copy(),
         'good': [], 'bad': [], 'suspended': [],            
-        'is_processing': False, 'stop_requested': False
+        'is_processing': False, 'stop_requested': False,
+        'batch_size': 100,
+        'waiting_for_batch_size': True
     }
 
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("▶️ Start Accounts", callback_data="start_batch"))
-    
     bot.send_message(
         chat_id, 
-        f"✅ *টেক্সট রিসিভ হয়েছে!*\n📦 *অ্যাকাউন্ট:* {len(valid_accounts)}\n\n"
-        f"👇 কাজ শুরু করতে নিচের বাটনে ক্লিক করুন:", 
-        reply_markup=markup, parse_mode='Markdown'
+        f"✅ *টেক্সট রিসিভ হয়েছে!*\n📦 *মোট অ্যাকাউন্ট:* {len(valid_accounts)}\n\n"
+        f"👉 আপনি একবারে কয়টি অ্যাকাউন্ট চেক করতে চান? (Batch Size সংখ্যায় লিখুন, যেমন: 100 বা 500 বা 1000):",
+        parse_mode='Markdown'
     )
 
 def batch_processor(chat_id):
-    session = user_sessions[chat_id]
-    session['is_processing'] = True
-    session['stop_requested'] = False
-    
-    batch = session['remaining'][:100]
-    session['remaining'] = session['remaining'][100:]
-    unprocessed = []
-
-    markup = InlineKeyboardMarkup()
-    markup.row(
-        InlineKeyboardButton("🛑 Stop Processing", callback_data="stop_batch"),
-        InlineKeyboardButton("📥 Live Download", callback_data="ask_format_live")
-    )
-
-    process_msg = bot.send_message(
-        chat_id, 
-        f"🔄 *Processing {len(batch)} Accounts...*\n(Using Safe Mobile Data)\n\n"
-        f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Susp: {len(session['suspended'])}\n\n"
-        f"মাঝপথে থামাতে বা ফাইল নামাতে চাইলে নিচের বাটন চাপুন।", 
-        reply_markup=markup, parse_mode='Markdown'
-    )
-
-    def worker(acc):
-        if session['stop_requested']:
-            unprocessed.append(acc)
-            return
-            
-        username, password, two_fa = acc
-        time.sleep(random.uniform(0.01, 0.1)) 
+    try:
+        session = user_sessions[chat_id]
+        session['is_processing'] = True
+        session['stop_requested'] = False
         
-        try:
-            totp = pyotp.TOTP(two_fa.replace(" ", ""))
-            two_fa_code = totp.now()
+        b_size = session.get('batch_size', 100)
+        batch = session['remaining'][:b_size]
+        session['remaining'] = session['remaining'][b_size:]
+        unprocessed = []
 
-            L = instaloader.Instaloader()
+        markup = InlineKeyboardMarkup()
+        markup.row(
+            InlineKeyboardButton("🛑 Stop Processing", callback_data="stop_batch"),
+            InlineKeyboardButton("📥 Live Download", callback_data="ask_format_live")
+        )
+
+        try:
+            process_msg = bot.send_message(
+                chat_id, 
+                f"🔄 *Processing {len(batch)} Accounts...*\n(Using Safe Mobile Data)\n\n"
+                f"🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Susp: {len(session['suspended'])}\n\n"
+                f"মাঝপথে থামাতে বা ফাইল নামাতে চাইলে নিচের বাটন চাপুন।", 
+                reply_markup=markup, parse_mode='Markdown'
+            )
+        except Exception as e:
+            print(f"Error sending start message: {e}")
+            process_msg = None
+
+        def worker(acc):
+            if session['stop_requested']:
+                unprocessed.append(acc)
+                return
+                
+            username, password, two_fa = acc
+            time.sleep(random.uniform(0.01, 0.1)) 
             
             try:
-                L.login(username, password)
-            except instaloader.exceptions.TwoFactorAuthRequiredException:
-                L.two_factor_login(two_fa_code)
-            except instaloader.exceptions.BadCredentialsException:
-                session['bad'].append(acc)
-                return
-            except instaloader.exceptions.ConnectionException as e:
-                # Checkpoint বা Suspended এরর ধরবে
-                err_msg = str(e).lower()
-                if "challenge" in err_msg or "checkpoint" in err_msg or "suspended" in err_msg or "login_required" in err_msg:
+                totp = pyotp.TOTP(two_fa.replace(" ", ""))
+                two_fa_code = totp.now()
+
+                L = instaloader.Instaloader()
+                
+                try:
+                    L.login(username, password)
+                except instaloader.exceptions.TwoFactorAuthRequiredException:
+                    L.two_factor_login(two_fa_code)
+                except instaloader.exceptions.BadCredentialsException:
+                    session['bad'].append(acc)
+                    return
+                except instaloader.exceptions.ConnectionException as e:
+                    # Checkpoint বা Suspended এরর ধরবে
+                    err_msg = str(e).lower()
+                    if any(x in err_msg for x in ["challenge", "checkpoint", "suspended", "login_required", "checkpoint_required"]):
+                        session['suspended'].append(acc)
+                    else:
+                        if not is_internet_working():
+                            unprocessed.append(acc)
+                        else:
+                            session['bad'].append(acc)
+                    return
+                except Exception:
+                    if not is_internet_working():
+                        unprocessed.append(acc)
+                    else:
+                        session['bad'].append(acc)
+                    return
+
+                # ১০০% ওয়ার্কিং কুকি চেক: 'sessionid' না থাকলে আইডি সাসপেন্ড বা চেকপয়েন্টে আছে!
+                cookie_dict = {cookie.name: cookie.value for cookie in L.context._session.cookies}
+                
+                if 'sessionid' not in cookie_dict:
                     session['suspended'].append(acc)
+                    return
+
+                try:
+                    profile = instaloader.Profile.from_username(L.context, username)
+                    _ = profile.followers
+                except instaloader.exceptions.ProfileNotExistsException:
+                    session['suspended'].append(acc)
+                    return
+                except Exception:
+                    pass
+
+                if 'datr' not in cookie_dict: cookie_dict['datr'] = 'CVTqaVVElLHF6TC46birRObC'
+                if 'wd' not in cookie_dict: cookie_dict['wd'] = f"{random.randint(360, 501)}x{random.randint(700, 954)}"
+                if 'dpr' not in cookie_dict: cookie_dict['dpr'] = '2.15625'
+                
+                keys_order = ['datr', 'ig_did', 'mid', 'dpr', 'csrftoken', 'ds_user_id', 'sessionid', 'wd', 'rur']
+                final_cookies = [f"{k}={cookie_dict[k]}" for k in keys_order if k in cookie_dict]
+                for k, v in cookie_dict.items():
+                    if k not in keys_order: final_cookies.append(f"{k}={v}")
+                        
+                raw_cookie_string = "; ".join(final_cookies)
+                session['good'].append((username, password, raw_cookie_string))
+
+            except Exception:
+                if not is_internet_working():
+                    unprocessed.append(acc)
                 else:
                     session['bad'].append(acc)
-                return
-            except Exception:
-                session['bad'].append(acc)
-                return
 
-            # ১০০% ওয়ার্কিং কুকি চেক: 'sessionid' না থাকলে আইডি সাসপেন্ড বা চেকপয়েন্টে আছে!
-            cookie_dict = {cookie.name: cookie.value for cookie in L.context._session.cookies}
-            
-            if 'sessionid' not in cookie_dict:
-                session['suspended'].append(acc)
-                return
+        with ThreadPoolExecutor(max_workers=max(1, len(batch))) as executor:
+            executor.map(worker, batch)
 
+        if unprocessed:
+            session['remaining'] = unprocessed + session['remaining']
+
+        session['is_processing'] = False
+        remaining_count = len(session['remaining'])
+
+        if process_msg:
+            try: bot.delete_message(chat_id, process_msg.message_id)
+            except: pass
+
+        markup = InlineKeyboardMarkup()
+        if session['stop_requested']:
+            if remaining_count > 0:
+                markup.row(InlineKeyboardButton("▶️ Resume Auto", callback_data="start_batch"))
+            markup.row(InlineKeyboardButton("📥 Download Backup Files", callback_data="ask_format_pause"))
+            markup.row(InlineKeyboardButton("⏹ Finish & Clear", callback_data="ask_format_finish"))
             try:
-                profile = instaloader.Profile.from_username(L.context, username)
-                _ = profile.followers
-            except instaloader.exceptions.ProfileNotExistsException:
-                session['suspended'].append(acc)
-                return
-            except Exception:
-                pass
-
-            if 'datr' not in cookie_dict: cookie_dict['datr'] = 'CVTqaVVElLHF6TC46birRObC'
-            if 'wd' not in cookie_dict: cookie_dict['wd'] = f"{random.randint(360, 501)}x{random.randint(700, 954)}"
-            if 'dpr' not in cookie_dict: cookie_dict['dpr'] = '2.15625'
-            
-            keys_order = ['datr', 'ig_did', 'mid', 'dpr', 'csrftoken', 'ds_user_id', 'sessionid', 'wd', 'rur']
-            final_cookies = [f"{k}={cookie_dict[k]}" for k in keys_order if k in cookie_dict]
-            for k, v in cookie_dict.items():
-                if k not in keys_order: final_cookies.append(f"{k}={v}")
-                    
-            raw_cookie_string = "; ".join(final_cookies)
-            session['good'].append((username, password, raw_cookie_string))
-
-        except Exception:
-            session['bad'].append(acc)
-
-    with ThreadPoolExecutor(max_workers=100) as executor:
-        executor.map(worker, batch)
-
-    if unprocessed:
-        session['remaining'] = unprocessed + session['remaining']
-
-    session['is_processing'] = False
-    remaining_count = len(session['remaining'])
-
-    try: bot.delete_message(chat_id, process_msg.message_id)
-    except: pass
-
-    markup = InlineKeyboardMarkup()
-    if session['stop_requested']:
-        if remaining_count > 0:
-            markup.row(InlineKeyboardButton("▶️ Resume Auto", callback_data="start_batch"))
-        markup.row(InlineKeyboardButton("📥 Download Backup Files", callback_data="ask_format_pause"))
-        markup.row(InlineKeyboardButton("⏹ Finish & Clear", callback_data="ask_format_finish"))
-        bot.send_message(chat_id, f"⏸ *কাজ থামানো হয়েছে!*\n🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Susp: {len(session['suspended'])}\n📦 বাকি আছে: {remaining_count} টি", reply_markup=markup, parse_mode='Markdown')
-    elif remaining_count > 0:
-        markup.add(InlineKeyboardButton(f"▶️ Resume Next 100", callback_data="start_batch"))
-        markup.add(InlineKeyboardButton("📥 Download Backup Files", callback_data="ask_format_pause"))
-        bot.send_message(chat_id, f"✅ *100 Accounts Done!*\n\n⚠️ *এখন আপনার ফোনের 'ফ্লাইট মোড (Airplane Mode)' ২ সেকেন্ডের জন্য অন-অফ করুন (নতুন আইপি পেতে)।*\n\nএরপর নিচের 'Resume Next 100' বাটনে চাপ দিন:", reply_markup=markup, parse_mode='Markdown')
-    else:
-        markup.add(InlineKeyboardButton("📥 Download Final Files", callback_data="ask_format_finish"))
-        bot.send_message(chat_id, f"🎉 *সবগুলোর কাজ শেষ!*\n🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Susp: {len(session['suspended'])}", reply_markup=markup, parse_mode='Markdown')
+                bot.send_message(chat_id, f"⏸ *কাজ থামানো হয়েছে!*\n🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Susp: {len(session['suspended'])}\n📦 বাকি আছে: {remaining_count} টি", reply_markup=markup, parse_mode='Markdown')
+            except Exception as e:
+                print(f"Error sending pause status: {e}")
+        elif remaining_count > 0:
+            markup.add(InlineKeyboardButton(f"▶️ Resume Next {b_size}", callback_data="start_batch"))
+            markup.add(InlineKeyboardButton("📥 Download Backup Files", callback_data="ask_format_pause"))
+            try:
+                bot.send_message(chat_id, f"✅ *{len(batch)} Accounts Done!*\n\n⚠️ *এখন আপনার ফোনের 'ফ্লাইট মোড (Airplane Mode)' ২ সেকেন্ডের জন্য অন-অফ করুন (নতুন আইপি পেতে)।*\n\nএরপর নিচের 'Resume Next {b_size}' বাটনে চাপ দিন:", reply_markup=markup, parse_mode='Markdown')
+            except Exception as e:
+                print(f"Error sending batch done message: {e}")
+        else:
+            markup.add(InlineKeyboardButton("📥 Download Final Files", callback_data="ask_format_finish"))
+            try:
+                bot.send_message(chat_id, f"🎉 *সবগুলোর কাজ শেষ!*\n🟢 Good: {len(session['good'])} | 🔴 Bad: {len(session['bad'])} | 🟡 Susp: {len(session['suspended'])}", reply_markup=markup, parse_mode='Markdown')
+            except Exception as e:
+                print(f"Error sending completion message: {e}")
+    except Exception as e:
+        print(f"Critical error in batch_processor: {e}")
+        if chat_id in user_sessions:
+            user_sessions[chat_id]['is_processing'] = False
 
 def ask_download_format(chat_id, download_type):
     markup = InlineKeyboardMarkup()
@@ -451,9 +524,10 @@ def send_final_files(chat_id, format_type="xlsx", is_final=True, is_live=False):
 def start_bot_polling():
     while True:
         try:
-            bot.polling(none_stop=True, interval=0, timeout=20)
-        except Exception:
-            time.sleep(3)
+            bot.infinity_polling(timeout=20, long_polling_timeout=10)
+        except Exception as e:
+            print(f"\n\033[1;31m[!] Polling crashed with error: {e}. Restarting in 5 seconds...\033[0m")
+            time.sleep(5)
 
 polling_thread = threading.Thread(target=start_bot_polling)
 polling_thread.daemon = True
