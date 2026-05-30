@@ -284,19 +284,22 @@ def batch_processor(chat_id):
             print(f"Error sending start message: {e}")
             process_msg = None
 
-        def worker(acc):
+        def worker(item):
+            idx, acc = item
             if session['stop_requested']:
                 unprocessed.append(acc)
                 return
                 
             username, password, two_fa = acc
-            time.sleep(random.uniform(0.01, 0.1)) 
+            # Stagger the thread starts slightly to avoid overloading the connection or Instagram
+            time.sleep(idx * 0.05) 
             
             try:
                 totp = pyotp.TOTP(two_fa.replace(" ", ""))
                 two_fa_code = totp.now()
 
-                L = instaloader.Instaloader()
+                # Set request_timeout=10 and max_connection_attempts=1 to avoid long blocks (defaults are 300s and 3 retries)
+                L = instaloader.Instaloader(request_timeout=10, max_connection_attempts=1)
                 
                 try:
                     L.login(username, password)
@@ -358,7 +361,7 @@ def batch_processor(chat_id):
                     session['bad'].append(acc)
 
         with ThreadPoolExecutor(max_workers=max(1, len(batch))) as executor:
-            executor.map(worker, batch)
+            executor.map(worker, enumerate(batch))
 
         if unprocessed:
             session['remaining'] = unprocessed + session['remaining']
