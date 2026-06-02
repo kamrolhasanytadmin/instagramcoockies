@@ -13,12 +13,22 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 import urllib.request
 
+_internet_status = {"last_check": 0, "status": True}
+_internet_lock = threading.Lock()
+
 def is_internet_working():
-    try:
-        urllib.request.urlopen('https://api.telegram.org', timeout=5)
-        return True
-    except:
-        return False
+    global _internet_status
+    current_time = time.time()
+    with _internet_lock:
+        if current_time - _internet_status["last_check"] < 10:
+            return _internet_status["status"]
+        try:
+            urllib.request.urlopen('https://api.telegram.org', timeout=3)
+            _internet_status["status"] = True
+        except:
+            _internet_status["status"] = False
+        _internet_status["last_check"] = current_time
+        return _internet_status["status"]
 
 class MyExceptionHandler(telebot.ExceptionHandler):
     def handle(self, exception):
@@ -290,11 +300,11 @@ def batch_processor(chat_id):
                 unprocessed.append(acc)
                 return
                 
-            username, password, two_fa = acc
-            # Stagger the thread starts slightly to avoid overloading the connection or Instagram
-            time.sleep(idx * 0.05) 
-            
             try:
+                username, password, two_fa = acc
+                # Stagger the thread starts slightly to avoid overloading the connection or Instagram
+                time.sleep(idx * 0.05) 
+                
                 totp = pyotp.TOTP(two_fa.replace(" ", ""))
                 two_fa_code = totp.now()
 
@@ -314,16 +324,10 @@ def batch_processor(chat_id):
                     if any(x in err_msg for x in ["challenge", "checkpoint", "suspended", "login_required", "checkpoint_required"]):
                         session['suspended'].append(acc)
                     else:
-                        if not is_internet_working():
-                            unprocessed.append(acc)
-                        else:
-                            session['bad'].append(acc)
+                        session['bad'].append(acc)
                     return
                 except Exception:
-                    if not is_internet_working():
-                        unprocessed.append(acc)
-                    else:
-                        session['bad'].append(acc)
+                    session['bad'].append(acc)
                     return
 
                 # ১০০% ওয়ার্কিং কুকি চেক: 'sessionid' না থাকলে আইডি সাসপেন্ড বা চেকপয়েন্টে আছে!
@@ -355,16 +359,13 @@ def batch_processor(chat_id):
                 session['good'].append((username, password, raw_cookie_string))
 
             except Exception:
-                if not is_internet_working():
-                    unprocessed.append(acc)
-                else:
-                    session['bad'].append(acc)
+                session['bad'].append(acc)
 
         with ThreadPoolExecutor(max_workers=max(1, len(batch))) as executor:
             executor.map(worker, enumerate(batch))
 
         if unprocessed:
-            session['remaining'] = unprocessed + session['remaining']
+            session['remaining'] = session['remaining'] + unprocessed
 
         session['is_processing'] = False
         remaining_count = len(session['remaining'])
@@ -423,6 +424,7 @@ def callback_query(call):
 
     if data == "start_batch":
         if session['is_processing']: return
+        session['is_processing'] = True
         try: bot.delete_message(chat_id, call.message.message_id)
         except: pass
         threading.Thread(target=batch_processor, args=(chat_id,)).start()
