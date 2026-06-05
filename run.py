@@ -80,10 +80,21 @@ while True:
         print(f"\n\033[1;33m⚠️ Connection failed! Check your internet or VPN. Retrying in 5 seconds... ({e})\033[0m")
         time.sleep(5)
 
+ALLOWED_USERS = [6412225513, 8596783717]
+
+def is_authorized(message):
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    if user_id not in ALLOWED_USERS:
+        bot.send_message(message.chat.id, "ki rag korla ?")
+        return False
+    return True
+
 user_sessions = {}
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    if not is_authorized(message):
+        return
     chat_id = message.chat.id
     welcome_text = (
         "🔥 *MASS IG Extractor PRO (Mobile Data)* 🔥\n"
@@ -100,6 +111,8 @@ def send_welcome(message):
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
+    if not is_authorized(message):
+        return
     chat_id = message.chat.id
     if chat_id in user_sessions and user_sessions[chat_id].get('is_processing'):
         bot.send_message(chat_id, "⚠️ আপনার একটি কাজ রানিং আছে! আগে সেটি Stop করুন।")
@@ -200,6 +213,8 @@ def handle_document(message):
 
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
+    if not is_authorized(message):
+        return
     chat_id = message.chat.id
     text = message.text.strip()
     
@@ -413,6 +428,14 @@ def ask_download_format(chat_id, download_type):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     chat_id = call.message.chat.id
+    user_id = call.from_user.id if call.from_user else chat_id
+    if user_id not in ALLOWED_USERS:
+        try:
+            bot.answer_callback_query(call.id, "ki rag korla ?", show_alert=True)
+        except:
+            pass
+        return
+        
     data = call.data
     
     if chat_id not in user_sessions:
